@@ -1,42 +1,3 @@
-#!/usr/bin/env python3
-"""Standalone inference for the final Dere Detector V3.2 EVA×2 ensemble.
-
-This script mirrors the saved-model inference path used in the final
-`dere.ipynb` notebook. It loads the fine-tuned/saved heads from Google Drive
-and downloads only the two public pretrained visual backbones required by the
-final ensemble:
-
-- SmilingWolf/wd-eva02-large-tagger-v3
-- google/siglip2-base-patch16-384
-
-Expected model bundle
----------------------
-DereDetector_Final_Model/
-├── models_v3/
-│   ├── nli_large_full_full/
-│   ├── modernbert_full/
-│   ├── tfidf_full.joblib
-│   ├── eva_full_head.joblib
-│   └── siglip2_full_head.joblib
-└── final_config_v3.json
-
-Example
--------
-python src/inference.py \
-  --model-dir /path/to/DereDetector_Final_Model \
-  --image /path/to/character.png \
-  --name "Character Name" \
-  --personality "A cheerful and affectionate character."
-
-Required packages
------------------
-numpy, pillow, joblib, scikit-learn, torch, transformers, timm,
-huggingface_hub, sentencepiece
-
-Internet access is required the first time EVA02/SigLIP2 (and optionally the
-original NLI tokenizer) are loaded from Hugging Face.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -70,10 +31,6 @@ EMOTION_TAG_WHITELIST = {
     "evil_smile", "light_smile", "wide-eyed",
 }
 
-
-# -----------------------------------------------------------------------------
-# Pure utilities. These intentionally match the final notebook implementation.
-# -----------------------------------------------------------------------------
 
 def softmax_np(x: np.ndarray) -> np.ndarray:
     x = np.asarray(x, dtype=np.float64)
@@ -195,10 +152,6 @@ def fuse_probabilities(
     return p, scores, pred
 
 
-# -----------------------------------------------------------------------------
-# Model bundle validation / device handling
-# -----------------------------------------------------------------------------
-
 def _has_model_weights(directory: Path) -> bool:
     return (directory / "model.safetensors").exists() or (directory / "pytorch_model.bin").exists()
 
@@ -289,8 +242,6 @@ def _select_device(requested: str = "auto") -> str:
             raise RuntimeError("CUDA was requested but torch.cuda.is_available() is False")
         return "cpu"
 
-    # Do a real kernel probe. This catches cases such as a Pascal P100 with a
-    # PyTorch/CUDA build that no longer ships kernels for that architecture.
     try:
         x = torch.ones(8, device="cuda")
         y = x * 2
@@ -322,11 +273,8 @@ def _clean_torch(device: str) -> None:
         torch.cuda.empty_cache()
 
 
-# -----------------------------------------------------------------------------
-# Final predictor
-# -----------------------------------------------------------------------------
 class DereDetectorPredictor:
-    """Exact saved-model inference path for the final V3.2 EVA×2 ensemble."""
+    """Inference for the final V3.2 EVA×2 ensemble."""
 
     def __init__(self, model_root: Path | str, device: str = "auto") -> None:
         self.root = resolve_bundle_root(Path(model_root))
@@ -345,7 +293,6 @@ class DereDetectorPredictor:
         self.model_names = dict(self.config["models"])
         self.device = _select_device(device)
 
-        # The sklearn heads are small and safe to keep resident.
         self.tfidf = joblib.load(self.models_dir / "tfidf_full.joblib")
         self.eva_head = joblib.load(self.models_dir / "eva_full_head.joblib")
         self.siglip_head = joblib.load(self.models_dir / "siglip2_full_head.joblib")
@@ -384,7 +331,6 @@ class DereDetectorPredictor:
 
         with Image.open(image_path) as im:
             x = transform(pil_pad_square(pil_ensure_rgb(im))).unsqueeze(0)
-        # WD v3 TIMM convention used by the training notebook: RGB -> BGR.
         x = x[:, [2, 1, 0], :, :].to(self.device)
 
         with torch.inference_mode(), _amp_context(self.device):
@@ -450,12 +396,7 @@ class DereDetectorPredictor:
         return softmax_np(logits / temperature)[0]
 
     def _load_nli_tokenizer(self):
-        """Load the training tokenizer first; fall back to the saved local copy.
-
-        The final notebook trained from the original MoritzLaurer tokenizer.
-        Loading it from the original repo avoids the tokenizer-regex warning seen
-        on some Transformers versions while preserving the same tokenizer source.
-        """
+        """Load the original NLI tokenizer, then fall back to the saved copy."""
         from transformers import AutoTokenizer
 
         repo = str(self.model_names["nli_large"])
@@ -583,7 +524,6 @@ class DereDetectorPredictor:
         return {
             "name": name,
             "prediction": prediction,
-            # This is the same pre-bias fused probability returned by the notebook.
             "probability": {k: float(v) for k, v in zip(self.labels, fused)},
             "decision_scores": {k: float(v) for k, v in zip(self.labels, decision_scores)},
             "visual_cues": cues,
@@ -596,10 +536,6 @@ class DereDetectorPredictor:
             "model_version": self.config.get("version", "v3.2-final-eva-x2"),
         }
 
-
-# -----------------------------------------------------------------------------
-# CLI
-# -----------------------------------------------------------------------------
 
 def _personality_from_args(args: argparse.Namespace) -> str:
     if args.personality is not None and args.personality_file is not None:
