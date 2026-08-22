@@ -32,6 +32,22 @@ EMOTION_TAG_WHITELIST = {
 }
 
 
+def _pooled_hf_output(output):
+    import torch
+
+    if torch.is_tensor(output):
+        return output
+    pooled = getattr(output, "pooler_output", None)
+    if torch.is_tensor(pooled):
+        return pooled
+    image_embeds = getattr(output, "image_embeds", None)
+    if torch.is_tensor(image_embeds):
+        return image_embeds
+    if isinstance(output, (tuple, list)) and output and torch.is_tensor(output[0]):
+        return output[0]
+    raise TypeError(f"Unsupported Hugging Face feature output: {type(output).__name__}")
+
+
 def softmax_np(x: np.ndarray) -> np.ndarray:
     x = np.asarray(x, dtype=np.float64)
     if x.ndim == 1:
@@ -359,7 +375,7 @@ class DereDetectorPredictor:
         batch = {k: v.to(self.device) for k, v in batch.items()}
 
         with torch.inference_mode(), _amp_context(self.device):
-            e = model.get_image_features(**batch)
+            e = _pooled_hf_output(model.get_image_features(**batch))
         e = torch.nn.functional.normalize(e.float(), dim=1).cpu().numpy()
 
         del model, processor, batch
